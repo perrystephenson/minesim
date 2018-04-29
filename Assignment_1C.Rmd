@@ -1,0 +1,402 @@
+---
+title: "Digging for Gold"
+author: "Perry Stephenson"
+date: "2018-04-21"
+output:
+  html_document: 
+    toc: true
+  html_notebook: default
+---
+
+```{r load_packages, results="hide", message=FALSE}
+library(tidyverse)
+library(goldminer) # https://github.com/perrystephenson/goldminer
+```
+
+```{r config, results="hide", message=FALSE}
+config <- list()
+params <- list()
+env1 <- list()
+env2 <- list()
+config$rounds <- 1e5L # 1 hundred thousand rounds
+config$years <- 5
+```
+
+# Approach
+
+This analysis aims to simulate the environment independently from the decision
+making, so that the impacts of the decision making can be assessed in isolation
+from the assumed parameters driving the simulation. Accordingly, each of the
+environment variables will be modelled based on the provided parameters
+regardless of whether or not they are required in any individual simulation.
+Once the environment has been modelled, the impacts of decisions made by the
+business can be reasoned about without altering the modelled environment.
+
+# Environment
+
+### Gold Price
+
+As specified, the initial price of gold in the first year is $1700, and the 
+annual (absolute) change in the price is between -100 and 500, with an expected
+value of 100.
+
+```{r gold_price_config, results="hide", message=FALSE}
+params$gold_price_init <- 1700
+params$gold_price_delta <- list(a = -100, b = 500, c = 100)
+```
+
+```{r gold_price}
+env1$gold_price <- gen_gold_price(rounds = config$rounds, 
+                                  years = config$years, 
+                                  gold_price_init = params$gold_price_init,
+                                  gold_price_delta = params$gold_price_delta)
+```
+
+```{r plot_gold_price, echo=FALSE, fig.height=2}
+env1$gold_price %>%
+  gather("Year", "Price") %>%
+ggplot(aes(x = Price, fill = Year, colour = Year)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Gold Price Distribution", 
+       x = "Price (dollars)",
+       y = "Probability Density")
+```
+
+The distribution for Year 1 above is not an accurate depiction of the 
+distribution, and is an artefact of the kernel estimator being used by the PDF 
+function; a more accurate depiction of the PDF for Year 1 would be a single line
+at $1700.
+
+### Gold Production
+
+As specified, the initial gold production in the first year is between 300 and
+1400 ounces, with an expected value of 500 ounces. The production in each 
+subsequent year is determined using the previous year's output and multiplying
+the output by a value with a range of 0.8 to 1.8 with an expected value of 1.4.
+
+```{r gold_prod_config, results="hide", message=FALSE}
+params$prod_init <- list(a = 300, b = 1400, c = 500)
+params$prod_delta <- list(a = 0.8, b = 1.8, c = 1.4)
+```
+
+```{r gold_prod}
+env1$gold_prod <- gen_gold_prod(rounds = config$rounds, 
+                                years = config$years, 
+                                prod_init = params$prod_init,
+                                prod_delta = params$prod_delta)
+```
+
+```{r plot_gold_prod, echo=FALSE, fig.height=2}
+env1$gold_prod %>%
+  gather("Year", "Production") %>%
+ggplot(aes(x = Production, fill = Year, colour = Year)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Gold Production Distribution", 
+       x = "Production (ounces)",
+       y = "Probability Density")
+```
+
+The production of gold is trending up over time, with the length of the positive
+tail increasing each year. The uncertainty also increases over time.
+
+### Leased Mine Income Share
+
+The company owns a second mine that they lease to a third party. The contract is
+structured in such a way that the income received includes a profit share
+component. The range of income from leasing this second mine is between 1
+million and 3 million dollars, with an expected value of 2 million dollars.
+
+Each subsequent year the income from the lease is determined by modifying the amount of the lease that was received in the **first year**. The income from the mine is in the range of -20% (i.e. 0.8x multiplier) and 45% (i.e. 1.45x multiplier) with an expected value of 10% (i.e. 1.1x multiplier).
+
+
+```{r lease_profit_config, results="hide", message=FALSE}
+params$lease_profit_init <- list(a = 1000000, b = 3000000, c = 2000000)
+params$lease_profit_delta <- list(a = 0.8, b = 1.45, c = 1.1)
+```
+
+```{r lease_profit}
+env1$lease_profit <- gen_lease_profit(rounds = config$rounds, 
+                                      years = config$years, 
+                                      profit_init = params$lease_profit_init,
+                                      profit_delta = params$lease_profit_delta)
+```
+
+```{r plot_lease_profit, echo=FALSE, fig.height=2}
+env1$lease_profit %>%
+  gather("Year", "Profit") %>%
+ggplot(aes(x = Profit, fill = Year, colour = Year)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Lease Profit Distribution", 
+       x = "Lease Profit (dollars)",
+       y = "Probability Density")
+```
+
+The probability distribution for each of the subsequent years is equal for all
+intents and purposes due to the fact that years 2 through 5 are based on year 1
+rather than the previous year.
+
+### Reputation Management
+
+The company incurs reputation management costs while they own the second 
+(leased) mine. These costs have a fixed component ($350,000 per year whilst the
+leased mine is still in operation) and a variable component ($2,500 per day) 
+with an estimated range of 75 to 350 days per year (expected value 125 days).
+
+```{r rep_mgmt_config, results="hide", message=FALSE}
+params$rep_mgmt_fixed <- 350000
+params$rep_mgmt_rate <- 2500
+params$rep_mgmt_var <- list(a = 75, b = 350, c = 125)
+```
+
+```{r rep_mgmt}
+env1$rep_mgmt <- gen_rep_mgmt(rounds = config$rounds, 
+                              years = config$years, 
+                              fixed = params$rep_mgmt_fixed,
+                              rate = params$rep_mgmt_rate,
+                              hours = params$rep_mgmt_var)
+```
+
+```{r plot_rep_mgmt, echo=FALSE, fig.height=2}
+env1$rep_mgmt %>%
+  gather("Year", "Costs") %>%
+ggplot(aes(x = Costs, fill = Year, colour = Year)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Reputation Management Cost Distribution", 
+       x = "Costs",
+       y = "Probability Density")
+```
+
+The probability distribution for each year of reputation management is equal for
+all intents and purposes due to the fact that the assumptions are independent
+from year to year.
+
+### Mine Sale
+
+The leased mine can be sold at the start of any year, and the price offered will
+be fixed as follows:
+
+* Year 1 - $3,000,000
+* Year 2 - $1,700,000
+* Year 3 - $1,250,000
+* Year 4 - $750,000
+* Year 5 - $500,000
+
+```{r sale_price, echo=FALSE}
+params$sale_price <- list(
+  "Year1" = 3000000,
+  "Year2" = 1700000,
+  "Year3" = 1250000,
+  "Year4" =  750000,
+  "Year5" =  500000) 
+```
+
+### Interest Rate
+
+The interest rate is variable, but fixed for each 12 month period. The interest
+rate is not known in advance, but is understood to be in the range of 8% to 16%
+with an expected value of 12.75%.
+
+```{r interest_rate_config, results="hide", message=FALSE}
+params$interest_rate_range <- list(a = 0.08, b = 0.16, c = 0.1275)
+```
+
+```{r interest_rate}
+env1$interest_rate <- gen_independent(rounds = config$rounds, 
+                                        years = config$years, 
+                                        t = params$interest_rate_range)
+```
+
+```{r plot_interest_rate, echo=FALSE, fig.height=2}
+env1$interest_rate %>%
+  gather("Year", "Rate") %>%
+ggplot(aes(x = Rate, fill = Year, colour = Year)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Interest Rate Distribution", 
+       x = "Interest Rate",
+       y = "Probability Density")
+```
+
+The probability distribution for the interest rate for each year is equal for
+all intents and purposes due to the fact that the assumptions are independent
+from year to year.
+
+### Selling Cost
+
+There is a cost associated with selling the gold such as transportation, broker
+fees, taxes and other charges. This is simplified for this model by taking a
+percentage of the total amount of money generated from the ore. This amount is
+initially in the range of 5% to 9.5% with an expected value of 7%.
+
+The selling cost in each subsequent year is determined by applying a modifier to the previous year’s value. This modifier is a % change that is added to the previous year's cost using the formula $prev * (1 + mod)$. The selling cost modifier is in the range -0.1 to 0.45, with an expected value of 0.2275.
+
+```{r selling_cost_config, results="hide", message=FALSE}
+params$selling_cost_init <- list(a = 0.05, b = 0.095, c = 0.07)
+params$selling_cost_delta <- list(a = -0.1, b = 0.45, c = 0.2275)
+```
+
+```{r selling_cost_profit}
+env1$selling_cost <- gen_selling_rate(rounds = config$rounds, 
+                                      years = config$years, 
+                                      cost_init = params$selling_cost_init,
+                                      cost_delta = params$selling_cost_delta)
+```
+
+```{r plot_selling_cost, echo=FALSE, fig.height=2}
+env1$selling_cost %>%
+  gather("Year", "Cost") %>%
+ggplot(aes(x = Cost, fill = Year, colour = Year)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Selling Cost Distribution", 
+       x = "Selling Cost (rate)",
+       y = "Probability Density")
+```
+
+Selling costs are increasing over time, with increasing uncertainty.
+
+### Equipment and Labour Costs
+
+The mine requires fixed plant and employees to run. To simplify the model, all
+these costs are rolled up into the range of \$2,000,000 to \$5,500,000 with an
+expected value of \$4,000,000. As equipment can break down and even need
+replacing this value is calculated each year and is independent of the previous
+year.
+
+```{r equip_labour_config, results="hide", message=FALSE}
+params$equip_labour_range <- list(a = 2000000, b = 5500000, c = 4000000)
+```
+
+```{r equip_labour}
+env1$equip_labour <- gen_independent(rounds = config$rounds, 
+                                     years = config$years, 
+                                     t = params$equip_labour_range)
+```
+
+```{r plot_equip_labour, echo=FALSE, fig.height=2}
+env1$equip_labour %>%
+  gather("Year", "Costs") %>%
+ggplot(aes(x = Costs, fill = Year, colour = Year)) +
+  geom_density(alpha = 0.6) +
+  labs(title = "Equipment and Labour Cost Distribution", 
+       x = "Costs (dollars)",
+       y = "Probability Density")
+```
+
+The probability distribution for the equipment and labour costs for each year is
+equal for all intents and purposes due to the fact that the assumptions are
+independent from year to year.
+
+### Exploration
+
+The majority of the exploration parameters are related to decision making rather
+than the environment, so they will be assessed in the next section of this 
+report. As the second mine (if discovered) has a similar environment to the 
+first mine, we can model it's environment here using the same approach as above.
+
+```{r explore_env}
+# Start by copying the things that are equal for both mines
+env2 <- env1[c("gold_price", "interest_rate")]
+
+# Gold production in this mine is independent, but with the same parameters
+env2$gold_prod <- gen_gold_prod(rounds = config$rounds, 
+                                years = config$years, 
+                                prod_init = params$prod_init,
+                                prod_delta = params$prod_delta)
+
+# Selling cost in this mine is independent, but with the same parameters
+env2$selling_cost <- gen_selling_rate(rounds = config$rounds, 
+                                      years = config$years, 
+                                      cost_init = params$selling_cost_init,
+                                      cost_delta = params$selling_cost_delta)
+
+# Equipment and labour costs are half that of the other mine, but not 
+# independent. This means that they will depend on the simulation for mine 1.
+env2$equip_labour <- env1$equip_labour / 2
+```
+
+For these values, the only one that is time-dependent is the gold production 
+value, which effectively has a "time-shift" component based on the year the mine
+is found. We can deal with this when we need to. All other values are considered
+to be "fixed", i.e. the costs for year 3 do not depend on the year in which the
+mine was discovered.
+
+# Simulation and Decision Making
+
+With the environment modelled appropriately, we can now commence simulation and
+evaluation of possible decisions. 
+
+### "Hands Off" Simulation
+
+Firstly, let's look at some base-case assumptions for a first pass simulation:
+
+* No attempt to find the second mine
+* No mine sale activity
+
+```{r}
+profit_naive <- do_nothing_profits(env1)
+```
+
+Overall, how are the total profits in each year distributed?
+
+```{r plot_naive, echo=FALSE, fig.height=2}
+profit_naive$total_profit %>%
+  gather("Year", "Profit") %>%
+ggplot() +
+  geom_density(aes(x = Profit, fill = Year, colour = Year), alpha = 0.6) +
+  geom_line(data = data.frame(x=c(-4e6, -4e6), y=c(-Inf,Inf)), aes(x,y), col="red") +
+  labs(title = "Total Profit Distribution", 
+       x = "Profit (dollars)",
+       y = "Probability Density")
+```
+
+Without taking any action, the mining operation becomes more profitable over
+time. Unfortunately there are `r sum(profit_naive$total_profit$Year1 < -4e6)`
+cases where the profits are so far in the red that the bank will foreclose on
+the mine - we will need to work out how to avoid these cases in future.
+
+There are also `r prettyNum(sum(profit_naive$total_profit$Year1 < 0),",")` cases 
+where the profit was negative, which is concerning but ultimately not a 
+dealbreaker unless those cases don't provide a positive return over the 5 year
+estimates. Let's take a look at the 5 year estimates in detail:
+
+```{r echo=FALSE}
+profit_naive$financial_position %>% gather(Year, Status) %>% table
+```
+
+Clearly there is some work to be done here, but overall there are good odds that
+the business will make money, even in the absence of interventions.
+
+### Controls Available
+
+Each year, the operator of the mining company has the following options:
+
+* Sell the leased mine (can only do this once)
+* Explore for a second mine (can send 0-6 search parties, can only do this until found)
+* Close a non-leased mine
+
+This is significantly less control than a mining magnate would typically have
+over their investments.
+
+These decisions are to be made annually - no decisions can be made during the 
+year.
+
+### Visibility
+
+Whilst the owner has models to inform the team about the expected value of
+future environment variables (such as the price of gold, future production, etc)
+they cannot see the future. This means that "informed" decisions within
+individual simulations must be made according to the information available at
+the current time in that simulation.
+
+
+
+
+# Reproducability
+
+This analysis was performed using R, and the environment is described below to 
+allow the analysis to be reproduced faithfully.
+
+### Session info
+
+```{r colophon, echo=FALSE}
+devtools::session_info()
+```

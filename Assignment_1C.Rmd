@@ -1,7 +1,7 @@
 ---
 title: "Digging for Gold"
 author: "Perry Stephenson"
-date: "2018-04-21"
+date: "2018-05-01"
 output:
   html_document: 
     toc: true
@@ -9,6 +9,7 @@ output:
 ---
 
 ```{r load_packages, results="hide", message=FALSE}
+# devtools::install_github("perrystephenson/goldminer")
 library(tidyverse)
 library(goldminer) # https://github.com/perrystephenson/goldminer
 ```
@@ -18,19 +19,23 @@ config <- list()
 params <- list()
 env1 <- list()
 env2 <- list()
-config$rounds <- 1e5L # 1 hundred thousand rounds
+config$rounds <- 1e6L # 1 million rounds
 config$years <- 5
+set.seed(12345)
 ```
 
 # Approach
 
-This analysis aims to simulate the environment independently from the decision
-making, so that the impacts of the decision making can be assessed in isolation
-from the assumed parameters driving the simulation. Accordingly, each of the
-environment variables will be modelled based on the provided parameters
-regardless of whether or not they are required in any individual simulation.
-Once the environment has been modelled, the impacts of decisions made by the
-business can be reasoned about without altering the modelled environment.
+This analysis steps through several elements of the model, starting from the 
+environment (which the operator of the mine cannot influence), through to some 
+basic decision making strategies, robust modelled decisions, then some deep 
+dives into specific decisions as guided by the data.
+
+Accordingly, each of the environment variables will be modelled based on the
+provided parameters for the full five year period regardless of whether or not
+they are required in any individual simulation. Once the environment has been
+modelled, the impacts of decisions made by the business can be reasoned about
+without altering the modelled environment.
 
 # Environment
 
@@ -55,17 +60,17 @@ env1$gold_price <- gen_gold_price(rounds = config$rounds,
 ```{r plot_gold_price, echo=FALSE, fig.height=2}
 env1$gold_price %>%
   gather("Year", "Price") %>%
-ggplot(aes(x = Price, fill = Year, colour = Year)) +
-  geom_density(alpha = 0.6) +
+  filter(Year != "Year1") %>% 
+  ggplot() +
+  geom_density(aes(x = Price, fill = Year, colour = Year), alpha = 0.6) +
+  geom_line(data = data.frame(x=c(1700,1700),y=c(-Inf,Inf)), aes(x,y), col = "red") +
   labs(title = "Gold Price Distribution", 
        x = "Price (dollars)",
        y = "Probability Density")
 ```
 
-The distribution for Year 1 above is not an accurate depiction of the 
-distribution, and is an artefact of the kernel estimator being used by the PDF 
-function; a more accurate depiction of the PDF for Year 1 would be a single line
-at $1700.
+The distribution for Year 1 is marked by a single line at $1700, given that it 
+is fixed by definition.
 
 ### Gold Production
 
@@ -106,7 +111,10 @@ structured in such a way that the income received includes a profit share
 component. The range of income from leasing this second mine is between 1
 million and 3 million dollars, with an expected value of 2 million dollars.
 
-Each subsequent year the income from the lease is determined by modifying the amount of the lease that was received in the **first year**. The income from the mine is in the range of -20% (i.e. 0.8x multiplier) and 45% (i.e. 1.45x multiplier) with an expected value of 10% (i.e. 1.1x multiplier).
+Each subsequent year the income from the lease is determined by modifying the
+amount of the lease that was received in the **first year**. The income from the
+mine is in the range of -20% (i.e. 0.8x multiplier) and 45% (i.e. 1.45x
+multiplier) with an expected value of 10% (i.e. 1.1x multiplier).
 
 
 ```{r lease_profit_config, results="hide", message=FALSE}
@@ -343,6 +351,7 @@ profit_naive$total_profit %>%
 ggplot() +
   geom_density(aes(x = Profit, fill = Year, colour = Year), alpha = 0.6) +
   geom_line(data = data.frame(x=c(-4e6, -4e6), y=c(-Inf,Inf)), aes(x,y), col="red") +
+  geom_line(data = data.frame(x=c(0, 0), y=c(-Inf,Inf)), aes(x,y), col="black") +
   labs(title = "Total Profit Distribution", 
        x = "Profit (dollars)",
        y = "Probability Density")
@@ -351,33 +360,28 @@ ggplot() +
 Without taking any action, the mining operation becomes more profitable over
 time. Unfortunately there are `r sum(profit_naive$total_profit$Year1 < -4e6)`
 cases where the profits are so far in the red that the bank will foreclose on
-the mine - we will need to work out how to avoid these cases in future.
-
-There are also `r prettyNum(sum(profit_naive$total_profit$Year1 < 0),",")` cases 
-where the profit was negative, which is concerning but ultimately not a 
-dealbreaker unless those cases don't provide a positive return over the 5 year
-estimates. Let's take a look at the 5 year estimates in detail:
+the mine - and it only gets worse over the five year period:
 
 ```{r echo=FALSE}
 profit_naive$financial_position %>% gather(Year, Status) %>% table
 ```
 
-Clearly there is some work to be done here, but overall there are good odds that
-the business will make money, even in the absence of interventions.
+Clearly there is some work to be done here!
 
 ### Controls Available
 
 Each year, the operator of the mining company has the following options:
 
 * Sell the leased mine (can only do this once)
-* Explore for a second mine (can send 0-6 search parties, can only do this until found)
-* Close a non-leased mine
+* Explore for a third mine (can send 0-6 search parties, can only do this until found)
+* Close the third mine (if it has been found)
 
 This is significantly less control than a mining magnate would typically have
 over their investments.
 
 These decisions are to be made annually - no decisions can be made during the 
-year.
+year. This means that there are 5 decision points - one decision point before 
+each year.
 
 ### Visibility
 
@@ -387,8 +391,300 @@ they cannot see the future. This means that "informed" decisions within
 individual simulations must be made according to the information available at
 the current time in that simulation.
 
+### Priorities
 
+The primary objective is to avoid foreclosure from the bank. In the case that 
+foreclosure cannot be avoided, the objective is to minimise the chance of 
+foreclosure. For the purpose of this analysis, foreclosure is considered to be
+*avoided* when less than 1% of simulations result in foreclosure.
 
+The secondary objective is to maximise the median profit. Median has been 
+selected because it is easy to reason about - there is a 50% chance that the 
+profits will be at least this much.
+
+The final objective is to minimise uncertainty, which will be measured using
+*standard deviation* of the final profit.
+
+Decisions will be modelled in isolation where possible (for example when
+searching for a new mine) to reduce the complexity of the analysis and reduce 
+the impact of componding assumptions in the model outputs.
+
+### Naive approach to decisions
+
+Looking simply at the decisions we can make prior to the start of the first
+year, there are two decisions to make:
+
+1. Should the second mine be sold?
+1. Should the search for a third mine be funded? (and how much?)
+
+Based on the "do nothing" simulation above we know that the chance of
+foreclosure in the first year is negligible (0.1%), but the chance of 
+foreclosure by the end of the 5 years is significant (39%). We should therefore
+try to understand how our decisions in the first year impact this 5-year 
+foreclosure probability.
+
+#### Where are the profits coming from?
+
+The profit/loss performance of the first mine is summarised below:
+
+```{r echo=FALSE}
+profit_naive$profit %>% 
+  mutate(Year1 = case_when(Year1 < 0 ~ "Loss", Year1 >= 0 ~ "Profit"),
+         Year2 = case_when(Year2 < 0 ~ "Loss", Year2 >= 0 ~ "Profit"),
+         Year3 = case_when(Year3 < 0 ~ "Loss", Year3 >= 0 ~ "Profit"),
+         Year4 = case_when(Year4 < 0 ~ "Loss", Year4 >= 0 ~ "Profit"),
+         Year5 = case_when(Year5 < 0 ~ "Loss", Year5 >= 0 ~ "Profit")) %>% 
+  gather(Year, Status) %>% 
+  table
+```
+
+Overall, the first mine is problematic. We're really going to be leaning on the
+second and third mines to help us turn a profit here.
+
+The profit/loss performance of the second mine is summarised below:
+
+```{r echo=FALSE}
+profit_naive$leased_profit %>% 
+  mutate(Year1 = case_when(Year1 < 0 ~ "Loss", Year1 >= 0 ~ "Profit"),
+         Year2 = case_when(Year2 < 0 ~ "Loss", Year2 >= 0 ~ "Profit"),
+         Year3 = case_when(Year3 < 0 ~ "Loss", Year3 >= 0 ~ "Profit"),
+         Year4 = case_when(Year4 < 0 ~ "Loss", Year4 >= 0 ~ "Profit"),
+         Year5 = case_when(Year5 < 0 ~ "Loss", Year5 >= 0 ~ "Profit")) %>% 
+  gather(Year, Status) %>% 
+  table
+```
+
+This is looking much healthier! We should still look at selling though, as the 
+price in the first year is \$`r as.integer(params$sale_price$Year1)` which is 
+far from negligible. We can look at the expected five-year profits and compare
+these to the sale price to get a feel about whether this is a good deal.
+
+```{r echo=FALSE}
+profit_naive$leased_profit %>% 
+  mutate(Total = Year1 + Year2 + Year3 + Year4 + Year5) %>% 
+  ggplot() +
+  geom_density(aes(x = Total), fill = "blue", alpha = 0.6) + 
+  geom_line(data = data.frame(x=c(3e6, 3e6), y=c(-Inf,Inf)), aes(x,y), col="red") +
+  labs(title = "Total Leased Profit Distribution", 
+       x = "Profit (dollars)",
+       y = "Probability Density")
+```
+
+The sale price is in no way a fair price based on the expected returns from the
+second mine! However, the first objective is to avoid foreclosure, so we should
+analyse this option to see if it has a positive impact on the future foreclosure
+rate.
+
+```{r}
+sale_y1 <- profits_with_actions(env1, env2, params, sell_m2=1, find_m3=0)
+```
+
+```{r echo=FALSE}
+sale_y1$financial_position %>% gather(Year, Status) %>% table
+```
+
+Whilst this decision completely avoids the risk of foreclosure in the first year
+it makes the risk of foreclosure overall significantly worse due to the loss of
+the income from the second mine in subsequent years.
+
+> It appears to be a terrible idea to sell the second mine prior to the first
+year of operation.
+
+To assess whether it makes sense to search for the third mine at the start of
+the first year, we need to understand the potential profits from that mine if we
+were to find it.
+
+```{r}
+find_y1 <- profits_with_actions(env1, env2, params, sell_m2=0, find_m3=1)
+```
+
+```{r echo=FALSE}
+find_y1$financial_position %>% gather(Year, Status) %>% table
+```
+
+This is a marginally better result than the sale of the second mine, but it's 
+still no better than the "do nothing case".
+
+> It does not appear to make sense to search for the second mine in year 1.
+
+Finally, we should look at what happens when we sell the second mine and also
+find the third mine in the first year.
+
+```{r}
+both_y1 <- profits_with_actions(env1, env2, params, sell_m2=1, find_m3=1)
+```
+
+```{r echo=FALSE}
+both_y1$financial_position %>% gather(Year, Status) %>% table
+```
+
+Just as I thought, it's the worst of both worlds.
+
+> You should not sell the second mine nor search for the third mine in the first
+year.
+
+### Robust approach to decisions
+
+If we assume that the third mine can be found on demand and for zero cost (i.e. 
+best case), then there are 30 different combinations of the following options:
+
+* Sell the second mine never, or in one of the 5 years 
+* Find the third mine never, or in one of the first 4 years 
+
+For each of these options, we will compare the number of simulated foreclosures
+in the final year, as minimising this number is the best way to achieve the 
+first objective (avoid foreclosure).
+
+```{r}
+results <- tibble(
+  sell_m2 = rep(NA, 30),
+  find_m3 = rep(NA, 30),
+  y5_foreclosure = rep(NA, 30)
+)
+for (i in 0:5) {
+  for (j in 0:4) {
+    idx <- i*5 + j + 1
+    results[idx,"sell_m2"] <- i
+    results[idx,"find_m3"] <- j
+    profits <- profits_with_actions(env1, env2, params, sell_m2=i, find_m3=j)
+    results[idx,"y5_foreclosure"] <- 
+      sum(profits$financial_position$Year5 == "Foreclosure")
+  }
+}
+rm(i, j, idx)
+results %>% arrange(y5_foreclosure)
+```
+
+Clearly, in the absence of government intervention, there is no reason to take
+any action at all, and purchasing the mine is a terrible idea in the first 
+place.
+
+# Making it Work
+
+If Australian history tells us one thing, it's that mine operators know how to 
+get things done. Given the challenging mining environment, it's not unreasonable
+to expect that the following outcomes could be easily achieved with a little 
+lobbying and a few cash-for-comments articles in The Australian:
+
+1. In order to support Australian regional jobs, the tax will be set at 0%, 
+which will halve the selling costs for the first and third mines.
+1. Because Australian regional jobs cost a lot of money, the Government will 
+relax the immigration laws to allow foreign labour imports. This will halve the
+total equipment and labour costs for the first mine, and this will also flow in 
+to reduced costs for the third mine
+
+We can model these new assumptions, and see how they impact the analysis:
+
+```{r}
+env3 <- env1 # Make a copy
+env4 <- env2 # Make a copy
+
+env3$selling_cost <- env1$selling_cost / 2
+env3$equip_labour <- env1$equip_labour / 2
+env4$equip_labour <- env3$equip_labour / 2
+
+profits_with_actions(env3, env4, params, sell_m2=0, find_m3=0)$financial_position %>% 
+  gather(Year, Status) %>% 
+  table()
+```
+
+Now we're talking! Let's take a look at what actions will help drive the chance
+of foreclosure to zero:
+
+```{r}
+results <- tibble(
+  sell_m2 = rep(NA, 30),
+  find_m3 = rep(NA, 30),
+  y5_foreclosure = rep(NA, 30)
+)
+for (i in 0:5) {
+  for (j in 0:4) {
+    idx <- i*5 + j + 1
+    results[idx,"sell_m2"] <- i
+    results[idx,"find_m3"] <- j
+    profits <- profits_with_actions(env3, env4, params, sell_m2=i, find_m3=j)
+    results[idx,"y5_foreclosure"] <- 
+      sum(profits$financial_position$Year5 == "Foreclosure")
+  }
+}
+rm(i, j, idx)
+results %>% arrange(y5_foreclosure)
+```
+
+There is a bit of variability here, ranging from less 0.01% foreclosure to
+almost 0.1% foreclosure. It's definitely unlikely! There is now also a strong
+signal that finding the second mine as soon as possible is a good thing to do.
+We should start to incorporate the cost of the search - starting with 6 search
+parties to check everything is working.
+
+```{r}
+params$search_price <- list(   0, 2e5L, 5e5L, 9e5L, 13e5L, 17e5L) 
+params$search_prob  <- list(0.09, 0.28, 0.39, 0.48,  0.56,  0.62) 
+
+profits_with_search(env3, env4, params, sell_m2=0, search=6)$financial_position %>% 
+  gather(Year, Status) %>% 
+  table()
+```
+
+It looks like we have some balancing to do! Let's look at all of the options 
+together.
+
+```{r}
+results <- tibble(
+  sell_m2         = rep(NA, 36),
+  search_strength = rep(NA, 36),
+  y5_foreclosure  = rep(NA, 36)
+)
+for (i in 0:5) {
+  for (j in 1:6) {
+    idx <- i*6 + j
+    results[idx,"sell_m2"] <- i
+    results[idx,"search_strength"] <- j
+    profits <- profits_with_search(env3, env4, params, sell_m2=i, search=j)
+    results[idx,"y5_foreclosure"] <- 
+      sum(profits$financial_position$Year5 == "Foreclosure")
+  }
+}
+rm(i, j, idx)
+results %>% arrange(y5_foreclosure)
+```
+
+From this analysis it is very clear that searching is worthwhile, but that a 
+single search party is best when considering the risk of foreclosure. 
+
+Finally, let's consider how profits are impacted with each of these decisions.
+
+```{r}
+results <- tibble(
+  sell_m2         = rep(NA, 36),
+  search_strength = rep(NA, 36),
+  y5_foreclosure  = rep(NA, 36),
+  median_cash_y5  = rep(NA, 36)
+)
+for (i in 0:5) {
+  for (j in 1:6) {
+    idx <- i*6 + j
+    results[idx,"sell_m2"] <- i
+    results[idx,"search_strength"] <- j
+    profits <- profits_with_search(env3, env4, params, sell_m2=i, search=j)
+    results[idx,"y5_foreclosure"] <- 
+      sum(profits$financial_position$Year5 == "Foreclosure")
+    results[idx, "median_cash_y5"] <- median(profits$cash$Year5[[1]])
+  }
+}
+rm(i, j, idx)
+results %>% arrange(desc(median_cash_y5))
+```
+
+This is great news - there is a really clear strategy emerging here:
+
+1. Pressure the government for tax breaks, and hire cheap foreign workers. This is essential, and the mine should not be purchased without these conditions.
+1. Do not sell mine 2, and if you do have to sell it (for example if you have cashflow issues), sell it as late as possible.
+1. Send a small search party of only 1 or 2 groups.
+
+**If you follow these three steps, then there is less than 0.01% chance of the 
+bank foreclosing on the mine, and there is a 50% chance of making more than $12
+million in cash by the end of year 5.**
 
 # Reproducability
 
